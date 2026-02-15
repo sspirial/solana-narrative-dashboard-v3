@@ -1,19 +1,16 @@
 # Solana Narrative Dashboard (v3)
 
-A live, tested dashboard that ingests current web signals (Brave Search API) to detect emerging Solana narratives and generate 3–5 build ideas per narrative.
+Live, explainable Solana narrative dashboard that **does not use the owner’s API key**. Each user provides their own Brave Search API key in the UI.
 
 ## Run
 ```bash
 npm install
-BRAVE_API_KEY=your_key npm start
+npm start
 ```
-Open http://localhost:3000
+Open http://localhost:3000 and paste your Brave API key.
 
 ## How it works
-- Pulls live web results for Solana trends
-- Scores narratives by keyword signals
-- Shows build ideas + sources
-
-## Output
-- Narrative sections with ideas
-- Sources list (links + snippets)
+- UI asks the user for their Brave API key
+- Server uses that key for a single request
+- Narratives are scored via keyword rules
+- Output shows sources + 3–5 ideas per narrative

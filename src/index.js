@@ -2,7 +2,6 @@ const express = require('express');
 const axios = require('axios');
 
 const PORT = process.env.PORT || 3000;
-const BRAVE_API_KEY = process.env.BRAVE_API_KEY;
 const BRAVE_API_URL = 'https://api.search.brave.com/res/v1/web/search';
 
 const NARRATIVE_RULES = [
@@ -44,14 +43,14 @@ const NARRATIVE_RULES = [
   }
 ];
 
-async function braveSearch(query) {
-  if (!BRAVE_API_KEY) {
+async function braveSearch(query, apiKey) {
+  if (!apiKey) {
     throw new Error('Missing BRAVE_API_KEY');
   }
   const res = await axios.get(BRAVE_API_URL, {
     headers: {
       'Accept': 'application/json',
-      'X-Subscription-Token': BRAVE_API_KEY
+      'X-Subscription-Token': apiKey
     },
     params: { q: query, count: 10 }
   });
@@ -66,46 +65,85 @@ function scoreNarratives(text) {
   }).filter(n => n.score > 0).sort((a,b) => b.score - a.score);
 }
 
-function renderHTML(narratives, sources, error) {
-  const head = `<!doctype html><html><head><meta charset="utf-8"/>
-  <title>Solana Narrative Dashboard</title>
-  <style>body{font-family:system-ui;background:#0d1117;color:#c9d1d9;padding:24px}h1,h2{color:#58a6ff}a{color:#8b949e}section{border:1px solid #30363d;padding:16px;border-radius:8px;margin-bottom:16px}</style>
-  </head><body>`;
-  const footer = `</body></html>`;
-
-  if (error) {
-    return head + `<section><h2>Error</h2><p>${error}</p></section>` + footer;
-  }
-
-  const narrativesHtml = narratives.map(n => `
-    <section>
-      <h2>${n.name} (score: ${n.score})</h2>
-      <ul>${n.ideas.map(i => `<li>${i}</li>`).join('')}</ul>
-    </section>`).join('');
-
-  const sourcesHtml = sources.map(s => `
-    <li><a href="${s.url}" target="_blank" rel="noopener">${s.title}</a><br/><small>${s.description || ''}</small></li>`).join('');
-
-  return head + `
-    <h1>Solana Narrative Dashboard</h1>
-    <p>Live signals + explainable narrative detection</p>
-    ${narrativesHtml || '<section><p>No narratives detected from current sources.</p></section>'}
-    <section><h2>Sources</h2><ul>${sourcesHtml}</ul></section>
-  ` + footer;
-}
-
 const app = express();
+app.use(express.json());
 
-app.get('/', async (_req, res) => {
+app.get('/api/narratives', async (req, res) => {
   try {
-    const results = await braveSearch('Solana ecosystem trends February 2026');
+    const apiKey = req.query.key;
+    const results = await braveSearch('Solana ecosystem trends February 2026', apiKey);
     const text = results.map(r => `${r.title} ${r.description || ''}`).join(' ');
     const narratives = scoreNarratives(text);
-    const html = renderHTML(narratives, results.slice(0, 6));
-    res.send(html);
+    res.json({ narratives, sources: results.slice(0, 6) });
   } catch (err) {
-    res.status(500).send(renderHTML([], [], err.message));
+    res.status(400).json({ error: err.message || 'Request failed' });
   }
+});
+
+app.get('/', (_req, res) => {
+  res.send(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Solana Narrative Dashboard</title>
+<style>
+  body{font-family:system-ui;background:#0b0f19;color:#e5e7eb;padding:24px}
+  .container{max-width:980px;margin:0 auto}
+  h1{font-size:28px;margin-bottom:6px}
+  .sub{color:#9ca3af;margin-bottom:24px}
+  .card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px;margin-bottom:16px}
+  .badge{display:inline-block;background:#1f2937;color:#93c5fd;padding:4px 10px;border-radius:999px;font-size:12px;margin-left:8px}
+  .input{width:100%;padding:10px;border-radius:8px;border:1px solid #374151;background:#0f172a;color:#e5e7eb}
+  button{padding:10px 14px;border-radius:8px;border:0;background:#2563eb;color:white;font-weight:600;cursor:pointer}
+  a{color:#93c5fd}
+  .muted{color:#9ca3af}
+  details summary{cursor:pointer}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Solana Narrative Dashboard</h1>
+  <div class="sub">Live signals → explainable narratives → build ideas</div>
+
+  <div class="card">
+    <h3>Connect your Brave API key</h3>
+    <p class="muted">Your key is used in-browser for this request only. It is not stored on the server.</p>
+    <input class="input" id="key" placeholder="Paste Brave API key" />
+    <button onclick="run()">Run Analysis</button>
+    <div id="status" class="muted" style="margin-top:8px"></div>
+  </div>
+
+  <div id="results"></div>
+</div>
+
+<script>
+async function run(){
+  const key = document.getElementById('key').value.trim();
+  const status = document.getElementById('status');
+  status.textContent = 'Running...';
+  if(!key){ status.textContent='Please paste your Brave API key.'; return; }
+  const res = await fetch('/api/narratives?key='+encodeURIComponent(key));
+  const data = await res.json();
+  if(data.error){ status.textContent = data.error; return; }
+  status.textContent = 'Updated just now.';
+  const results = document.getElementById('results');
+  results.innerHTML = '';
+  data.narratives.forEach(n => {
+    const card = document.createElement('div');
+    card.className='card';
+    const ideas = n.ideas.map(i => '<li>'+i+'</li>').join('');
+    card.innerHTML = '<h2>'+n.name+'<span class="badge">score '+n.score+'</span></h2><ul>'+ideas+'</ul>';
+    results.appendChild(card);
+  });
+  const src = document.createElement('div');
+  src.className='card';
+  const sources = data.sources.map(s => '<li><a href="'+s.url+'" target="_blank">'+s.title+'</a><br/><span class="muted">'+(s.description||'')+'</span></li>').join('');
+  src.innerHTML = '<details open><summary>Sources</summary><ul>'+sources+'</ul></details>';
+  results.appendChild(src);
+}
+</script>
+</body>
+</html>`);
 });
 
 app.listen(PORT, () => {

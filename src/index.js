@@ -3,6 +3,7 @@ const axios = require('axios');
 
 const PORT = process.env.PORT || 3000;
 const BRAVE_API_URL = 'https://api.search.brave.com/res/v1/web/search';
+const SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 
 const NARRATIVE_RULES = [
   {
@@ -44,14 +45,9 @@ const NARRATIVE_RULES = [
 ];
 
 async function braveSearch(query, apiKey) {
-  if (!apiKey) {
-    throw new Error('Missing BRAVE_API_KEY');
-  }
+  if (!apiKey) throw new Error('Missing BRAVE_API_KEY');
   const res = await axios.get(BRAVE_API_URL, {
-    headers: {
-      'Accept': 'application/json',
-      'X-Subscription-Token': apiKey
-    },
+    headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
     params: { q: query, count: 10 }
   });
   return res.data?.web?.results || [];
@@ -63,6 +59,23 @@ function scoreNarratives(text) {
     const score = rule.keywords.reduce((acc, kw) => acc + (lower.includes(kw) ? 1 : 0), 0);
     return { ...rule, score };
   }).filter(n => n.score > 0).sort((a,b) => b.score - a.score);
+}
+
+async function fetchGithubSignals() {
+  const q = 'topic:solana stars:>50';
+  const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&sort=stars&order=desc&per_page=5`;
+  const res = await axios.get(url, { headers: { 'Accept': 'application/vnd.github+json' } });
+  return res.data.items.map(r => ({ name: r.full_name, stars: r.stargazers_count, url: r.html_url }));
+}
+
+async function fetchSolanaSignals() {
+  const txCount = await axios.post(SOLANA_RPC, { jsonrpc: '2.0', id: 1, method: 'getTransactionCount' });
+  const epoch = await axios.post(SOLANA_RPC, { jsonrpc: '2.0', id: 2, method: 'getEpochInfo' });
+  return {
+    transactionCount: txCount.data.result,
+    epoch: epoch.data.result.epoch,
+    slot: epoch.data.result.absoluteSlot
+  };
 }
 
 const app = express();
@@ -77,6 +90,15 @@ app.get('/api/narratives', async (req, res) => {
     res.json({ narratives, sources: results.slice(0, 6) });
   } catch (err) {
     res.status(400).json({ error: err.message || 'Request failed' });
+  }
+});
+
+app.get('/api/signals', async (_req, res) => {
+  try {
+    const [github, solana] = await Promise.all([fetchGithubSignals(), fetchSolanaSignals()]);
+    res.json({ github, solana });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Signal fetch failed' });
   }
 });
 
@@ -106,8 +128,13 @@ app.get('/', (_req, res) => {
   <div class="sub">Live signals → explainable narratives → build ideas</div>
 
   <div class="card">
+    <h3>Signals (live)</h3>
+    <div id="signals" class="muted">Loading signals…</div>
+  </div>
+
+  <div class="card">
     <h3>Connect your Brave API key</h3>
-    <p class="muted">Your key is used in-browser for this request only. It is not stored on the server.</p>
+    <p class="muted">Your key is used for this request only. It is not stored.</p>
     <input class="input" id="key" placeholder="Paste Brave API key" />
     <button onclick="run()">Run Analysis</button>
     <div id="status" class="muted" style="margin-top:8px"></div>
@@ -117,6 +144,17 @@ app.get('/', (_req, res) => {
 </div>
 
 <script>
+async function loadSignals(){
+  const el = document.getElementById('signals');
+  try{
+    const res = await fetch('/api/signals');
+    const data = await res.json();
+    if(data.error){ el.textContent = data.error; return; }
+    const gh = data.github.map(r => '<li><a href="'+r.url+'" target="_blank">'+r.name+'</a> — ★'+r.stars+'</li>').join('');
+    el.innerHTML = '<b>Solana RPC:</b> txCount '+data.solana.transactionCount+', epoch '+data.solana.epoch+', slot '+data.solana.slot+'<br/><b>GitHub:</b><ul>'+gh+'</ul>';
+  }catch(e){ el.textContent = 'Failed to load signals.'; }
+}
+
 async function run(){
   const key = document.getElementById('key').value.trim();
   const status = document.getElementById('status');
@@ -141,6 +179,8 @@ async function run(){
   src.innerHTML = '<details open><summary>Sources</summary><ul>'+sources+'</ul></details>';
   results.appendChild(src);
 }
+
+loadSignals();
 </script>
 </body>
 </html>`);
